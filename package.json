@@ -1,0 +1,24 @@
+{
+  "name": "driftlab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:mcp": "bun run src/mcp-server.ts",
+    "demo": "bun run src/demo.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@armoriq/sdk": "^0.6.10",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "dotenv": "^18.0.7",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "@types/dotenv": "^8.2.3",
+    "@types/node": "^26.6.5",
+    "typescript": "^5.8.3"
+  }
+}
