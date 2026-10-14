@@ -1,24 +1,31 @@
 {
-  "name": "driftlab",
-  "version": "0.1.0",
+  "name": "prompt-injection-gauntlet",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:mcp": "bun run src/mcp-server.ts",
-    "demo": "bun run src/demo.ts",
+    "dev": "bun --watch src/server.ts",
+    "start": "bun src/server.ts",
+    "api": "bun src/server.ts",
+    "mcp": "bun src/mcp-server.ts",
+    "mcp:http": "bun src/mcp-http-server.ts",
+    "build": "bun build ./src/server.ts --outdir ./dist --target bun",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@armoriq/sdk": "^0.6.10",
+    "@armoriq/sdk": "^0.6.7",
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "dotenv": "^18.0.7",
+    "express": "^5.1.0",
+    "ink": "^5.2.1",
+    "openai": "^7.33.0",
+    "react": "^18.3.1",
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@types/bun": "^1.4.2",
-    "@types/dotenv": "^8.2.3",
-    "@types/node": "^26.6.5",
+    "@types/bun": "latest",
+    "@types/express": "^5.0.1",
+    "@types/react": "^18.3.20",
     "typescript": "^5.8.3"
   }
 }
