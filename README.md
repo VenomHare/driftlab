@@ -1,53 +1,176 @@
 # DriftLab
 
-DriftLab is a browser-based prompt-injection drill for an AI configuration-review agent. The agent uses a real LLM to plan an MCP tool call; ArmorIQ checks that action before the tool handler can run. The demo must show one allowed configuration read and one blocked secret-read attempt.
+DriftLab is a small security demo for AI agents.
 
-## Architecture
+It shows the same prompt moving through two agent loops:
+
+1. **Without ArmorIQ** — the LLM can call MCP tools directly.
+2. **With ArmorIQ** — ArmorIQ checks the tool plan before MCP can run a tool.
+
+The canvas shows:
 
 ```text
-Browser console → Express API → LLM chooses read_file → ArmorIQ signed-plan check → MCP / fake sandbox tool
-                                                     ↘ blocks injected read_secret before handler execution
+Prompt → LLM → MCP → tools → Output → LLM
 ```
 
-All files, secrets, email, and CRM records are disposable fixtures. No email is sent and no external CRM is connected.
+The protected loop adds ArmorIQ between the LLM and MCP.
 
-## Setup
+All demo data is fictional. The email tool writes to a test outbox. It does not send real email.
+
+## Project layout
+
+| Path | Purpose |
+|---|---|
+| `frontend/` | React + Vite Pages frontend, with its own package/config |
+| `backend/` | Hono API Worker, with its own package/config |
+| `mcp/` | Hono MCP Worker, with its own package/config |
+| `backend/migrations/` | Cloudflare D1 schema |
+| `frontend/wrangler.toml` | Pages configuration |
+| `backend/wrangler.toml` | API Worker configuration |
+| `mcp/wrangler.toml` | MCP Worker configuration |
+
+Each package owns its readable source, config, and dependencies. Generated bundles stay inside the package `dist/` directories and should not be edited directly.
+
+## Install
 
 ```bash
-bun install
-cp .env.example .env
+cd frontend && bun install
+cd ../backend && bun install
+cd ../mcp && bun install
 ```
 
-Set `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and the compact default model (`gpt-5-mini`), plus your ArmorIQ key, agent ID, user email, and MCP name. `OPENAI_BASE_URL` must be an OpenAI-compatible `/v1` base, such as `https://api.openai.com/v1`; no code changes are needed to use your own compatible gateway. In ArmorIQ, register the `driftlab-agent` agent and `driftlab-mcp` MCP server, then create policy rules that allow `read_file` and deny `read_secret`, `email_send`, and `crm_export`.
-
-For a public demo, expose the local `http://127.0.0.1:3001/mcp` endpoint through a secure HTTPS tunnel and register that URL. The MCP uses Streamable HTTP at `/mcp`.
-
-## Run
-
-In two terminals:
+Wrangler can be installed globally, or run from the local dependency:
 
 ```bash
-bun run mcp:http
-bun run dev
+wrangler --version
 ```
 
-Open `http://127.0.0.1:3000`, then select **Run security drill**. A valid recording shows:
+## Run locally with React, Vite, and Workers
 
-1. The real model plans `read_file(src/config.ts)`.
-2. ArmorIQ allows it and its fake handler runs.
-3. The injected `read_secret` attempt is checked against the same plan/policy.
-4. ArmorIQ blocks it and the UI proves that its handler did not execute.
+Use three terminals.
 
-## Verify
+### 1. Start the API Worker
+
+```bash
+bun run dev:backend
+```
+
+The API Worker runs at `http://localhost:8788`.
+
+For local LLM calls, put `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL` in `backend/.env.dev`. The backend dev script starts Wrangler with `--env dev`, so this file is loaded by the API Worker. The key is read only by the API Worker and must not be committed.
+
+### 2. Start the MCP Worker
+
+```bash
+bun run dev:mcp
+```
+
+The MCP Worker runs at `http://localhost:8787`.
+
+### 3. Start the React frontend
+
+The frontend defaults to the local API Worker at `http://localhost:8788` during Vite development:
+
+```bash
+bun run dev:frontend
+```
+
+If the API Worker uses another port, override it with `VITE_API_BASE_URL`.
+
+Open the Vite URL shown in the terminal, normally `http://localhost:5173`.
+
+## What happens when you click “Execute workflow”
+
+1. React opens an `EventSource` connection to `GET /api/demo/run-stream`.
+2. The Hono API Worker starts the demo run.
+3. The Worker sends `event: step` messages as each node runs.
+4. React updates each matching node:
+   - yellow: running
+   - green: allowed or successful
+   - red: blocked or unsafe
+5. The unprotected loop sends tool calls through MCP without a policy check. The secret, email, and CRM actions reach their handlers.
+6. The protected loop sends the same attempts through ArmorIQ:
+   - `read_file` is allowed
+   - `read_secret` is blocked
+   - `email_send` is blocked
+   - `crm_export` is blocked
+7. The Worker writes the execution record to D1.
+8. The Worker sends `event: complete`. React updates the execution bar and closes the stream.
+
+The API also keeps `POST /api/demo/run` for non-streaming clients.
+
+## D1 setup
+
+Create the database once:
+
+```bash
+wrangler d1 create driftlab
+```
+
+Copy the returned database ID into both `backend/wrangler.toml` and `mcp/wrangler.toml`.
+
+Apply the schema locally:
+
+```bash
+wrangler d1 migrations apply driftlab --local --config backend/wrangler.toml
+```
+
+Apply it remotely after authentication:
+
+```bash
+wrangler d1 migrations apply driftlab --remote --config backend/wrangler.toml
+```
+
+The schema stores execution records and MCP tool-call records.
+
+The MCP tools use D1 as the Cloudflare-compatible sandbox. Migration `0002_seed_worker_sandbox.sql` creates real sandbox files (`src/config.ts` and `README.md`), a demo secret, an email outbox, and CRM contacts. `read_file` queries those rows; it does not use Node filesystem APIs, because a deployed Worker cannot read an arbitrary repository folder.
+
+After changing the migration, apply it locally and remotely:
+
+```bash
+wrangler d1 migrations apply driftlab --local --config backend/wrangler.toml
+wrangler d1 migrations apply driftlab --remote --config backend/wrangler.toml
+```
+
+## Deploy to Cloudflare
+
+```bash
+wrangler login
+wrangler deploy --config backend/wrangler.toml
+wrangler deploy --config mcp/wrangler.toml
+```
+
+Build and deploy the Pages frontend with the deployed API URL:
+
+```bash
+VITE_API_BASE_URL=https://driftlab-api.<your-subdomain>.workers.dev bun run build
+wrangler pages deploy frontend/dist --project-name driftlab-pages
+```
+
+For Git-connected Pages use:
+
+```text
+Build command: bun run build
+Build output directory: frontend/dist
+Environment variable: VITE_API_BASE_URL=<deployed API Worker URL>
+```
+
+Set Worker secrets when the real integrations are wired into the Worker:
+
+```bash
+wrangler secret put OPENAI_API_KEY --config backend/wrangler.toml
+wrangler secret put ARMORIQ_API_KEY --config backend/wrangler.toml
+```
+
+The API Worker is configured for Groq with `OPENAI_BASE_URL=https://api.groq.com/openai/v1` and `OPENAI_MODEL=qwen/qwen3.8-27b`.
+
+## Checks
 
 ```bash
 bun run typecheck
-bun test
 bun run build
 ```
 
-An unconfigured model or ArmorIQ integration is intentionally displayed as an integration error. It is never presented as proof of a block.
+`bun run build` creates the React/Vite bundle in `frontend/dist`.
 
-## Submission evidence
-
-Capture one browser screenshot showing the allowed and blocked events, plus the corresponding ArmorIQ dashboard trace. This is a real SDK enforcement path; the app does not fabricate decisions or traces.
+The Cloudflare Worker implementation is the only backend path. It uses Hono, SSE, and D1.

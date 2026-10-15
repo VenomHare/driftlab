@@ -1,0 +1,15 @@
+name = "driftlab-mcp"
+main = "src/index.ts"
+compatibility_date = "2026-10-15"
+
+[dev]
+port = 8787
+
+[vars]
+API_ORIGIN = "https://driftlab-api.example.workers.dev"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "driftlab"
+database_id = "218da382-6678-411d-a1fa-c3c9d29c916a"
+ migrations_dir = "../backend/migrations"

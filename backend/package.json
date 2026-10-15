@@ -1,0 +1,16 @@
+{
+  "name": "driftlab-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --env dev --config wrangler.toml",
+    "deploy": "wrangler deploy --config wrangler.toml",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": { "hono": "^4.7.7" },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.26.0"
+  }
+}

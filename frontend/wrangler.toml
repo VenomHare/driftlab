@@ -1,0 +1,6 @@
+name = "driftlab-pages"
+compatibility_date = "2026-10-15"
+pages_build_output_dir = "dist"
+
+[vars]
+VITE_API_BASE_URL = "https://driftlab-api.example.workers.dev"
