@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host",
+    "preview": "vite preview --host",
+    "build:prod": "VITE_API_BASE_URL=https://driftlab-api.sarthakkadam147.workers.dev ENV=PROD bun run build",
     "build": "vite build",
     "typecheck": "tsc --noEmit"
   },
@@ -11,7 +13,8 @@
     "@fontsource-variable/instrument-sans": "^5.2.5",
     "@fontsource/jetbrains-mono": "^5.2.5",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
     "@types/react": "^18.3.20",

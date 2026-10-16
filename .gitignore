@@ -1,7 +1,8 @@
 node_modules
 .env
 .env.*
-!.env.example
+!**/.env.example
+.dev.vars*
 dist
 coverage
 data/*.sqlite

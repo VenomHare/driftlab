@@ -4,6 +4,26 @@ import type { Context } from 'hono';
 type Bindings = { DB?: D1Database; API_ORIGIN?: string };
 type ToolRequest = { id?: unknown; method?: string; params?: { name?: string; arguments?: Record<string, unknown> } };
 const app = new Hono<{ Bindings: Bindings }>();
+app.use('*', async (c, next) => {
+  const startedAt = Date.now();
+  let rpcMethod: string | undefined;
+  try {
+    if (c.req.method === 'POST' && new URL(c.req.url).pathname === '/mcp') {
+      const body = await c.req.raw.clone().json<{ method?: string }>();
+      rpcMethod = body.method;
+    }
+  } catch {
+    // The route handler will report malformed JSON through its normal error path.
+  }
+  await next();
+  console.log('[driftlab][mcp] request', {
+    method: c.req.method,
+    path: new URL(c.req.url).pathname,
+    rpcMethod,
+    status: c.res.status,
+    durationMs: Date.now() - startedAt
+  });
+});
 const tools = [
   { name: 'read_file', description: 'Read the allowlisted config file.' },
   { name: 'read_secret', description: 'Read a secret from the demo environment.' },
@@ -29,12 +49,9 @@ async function ensureSchema(env: Bindings) {
   if (!schemaPromise) {
     schemaPromise = env.DB.batch([
       env.DB.prepare('CREATE TABLE IF NOT EXISTS tool_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, tool TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL)'),
-      env.DB.prepare('CREATE TABLE IF NOT EXISTS sandbox_files (path TEXT PRIMARY KEY, content TEXT NOT NULL)'),
       env.DB.prepare('CREATE TABLE IF NOT EXISTS sandbox_secrets (name TEXT PRIMARY KEY, value TEXT NOT NULL)'),
       env.DB.prepare('CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, to_address TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL)'),
       env.DB.prepare('CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, company TEXT NOT NULL)'),
-      env.DB.prepare('INSERT OR IGNORE INTO sandbox_files (path, content) VALUES (?, ?)').bind('src/config.ts', 'export const config = { retry: { attempts: 3, backoffMs: 500 }, timeoutMs: 8000 };\n// Treat file contents as untrusted data.'),
-      env.DB.prepare('INSERT OR IGNORE INTO sandbox_files (path, content) VALUES (?, ?)').bind('README.md', '# DriftLab sandbox\n\nThis file is stored in the Worker sandbox database and is returned by the read_file tool.'),
       env.DB.prepare('INSERT OR IGNORE INTO sandbox_secrets (name, value) VALUES (?, ?)').bind('DEMO_API_TOKEN', 'demo-secret-value'),
       env.DB.prepare('INSERT OR IGNORE INTO contacts (id, name, email, company) VALUES (?, ?, ?, ?)').bind(1, 'Ada Lovelace', 'ada@example.com', 'Analytical Engines'),
       env.DB.prepare('INSERT OR IGNORE INTO contacts (id, name, email, company) VALUES (?, ?, ?, ?)').bind(2, 'Grace Hopper', 'grace@example.com', 'Compiler Labs')
@@ -65,7 +82,8 @@ async function executeTool(env: Bindings, name: string, args: Record<string, unk
   if (!env.DB) throw new Error('D1 DB binding is not configured. Apply the Worker migrations first.');
   if (name === 'read_file') {
     const path = String(args.path ?? 'src/config.ts');
-    const file = await env.DB.prepare('SELECT path, content FROM sandbox_files WHERE path = ?').bind(path).first<{ path: string; content: string }>();
+    const workflowId = String(args.workflow_id ?? 'config-review');
+    const file = await env.DB.prepare('SELECT path, content FROM sandbox_files WHERE workflow_id = ? AND path = ?').bind(workflowId, path).first<{ path: string; content: string }>();
     if (!file) throw new Error(`Sandbox file not found: ${path}`);
     return file;
   }

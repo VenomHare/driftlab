@@ -109,14 +109,7 @@ wrangler d1 create driftlab
 
 Copy the returned database ID into both `backend/wrangler.toml` and `mcp/wrangler.toml`.
 
-Apply the schema to both local Worker D1 instances:
-
-```bash
-bun run --cwd backend migrate:local
-bun run --cwd mcp migrate:local
-```
-
-Apply it to the remote D1 database after authentication. Run both commands because each Worker owns a D1 binding:
+Local backend and MCP development both connect to this remote D1 database. Authenticate with Wrangler, then apply migrations to both Worker bindings:
 
 ```bash
 bun run --cwd backend migrate:remote
@@ -125,13 +118,13 @@ bun run --cwd mcp migrate:remote
 
 The schema stores execution records and MCP tool-call records.
 
-The MCP tools use D1 as the Cloudflare-compatible sandbox. Migration `0002_seed_worker_sandbox.sql` creates real sandbox files (`src/config.ts` and `README.md`), a demo secret, an email outbox, and CRM contacts. `read_file` queries those rows; it does not use Node filesystem APIs, because a deployed Worker cannot read an arbitrary repository folder.
+The MCP tools use D1 as the Cloudflare-compatible sandbox. Migration `0002_seed_worker_sandbox.sql` creates the initial sandbox files, a demo secret, an email outbox, and CRM contacts. Migration `0003_workflow_sandbox_files.sql` scopes files by workflow and adds each workflow's sample files. The View Sandbox drawer lists and reads files through the API Worker; the selected workflow ID is part of every query, so another workflow's files are not returned. The MCP `read_file` tool uses that same workflow scope. Files live in D1 rather than a Worker filesystem, which a deployed Worker cannot browse.
+
+Apply migration `0003_workflow_sandbox_files.sql` to both Worker bindings using the remote migration commands above before using the drawer or `read_file` tool. Local development writes to the shared remote database, so its changes persist there.
 
 After changing a migration, apply it to both Worker bindings:
 
 ```bash
-bun run --cwd backend migrate:local
-bun run --cwd mcp migrate:local
 bun run --cwd backend migrate:remote
 bun run --cwd mcp migrate:remote
 ```
@@ -159,11 +152,16 @@ Build output directory: frontend/dist
 Environment variable: VITE_API_BASE_URL=<deployed API Worker URL>
 ```
 
-Set Worker secrets when the real integrations are wired into the Worker:
+Set the model and ArmorIQ Worker secrets before deploying. The protected workflow also needs the ArmorIQ user, agent, and MCP identity values configured in the ArmorIQ dashboard:
 
 ```bash
 wrangler secret put OPENAI_API_KEY --config backend/wrangler.toml
+wrangler secret put OPENROUTER_API_KEY --config backend/wrangler.toml
 wrangler secret put ARMORIQ_API_KEY --config backend/wrangler.toml
+wrangler secret put ARMORIQ_USER_ID --config backend/wrangler.toml
+wrangler secret put ARMORIQ_USER_EMAIL --config backend/wrangler.toml
+wrangler secret put ARMORIQ_AGENT_ID --config backend/wrangler.toml
+wrangler secret put ARMORIQ_MCP_NAME --config backend/wrangler.toml
 ```
 
 The API Worker is configured for Groq with `OPENAI_BASE_URL=https://api.groq.com/openai/v1` and `OPENAI_MODEL=qwen/qwen3.8-27b`.

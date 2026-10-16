@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
+import { ArmorIQClient } from '@armoriq/sdk';
 
 type Graph = 'baseline' | 'protected';
-type Bindings = { DB?: D1Database; OPENAI_API_KEY?: string; OPENAI_BASE_URL?: string; OPENAI_MODEL?: string; ARMORIQ_API_KEY?: string; ARMORIQ_MODE?: string; MCP_ENDPOINT?: string };
+type Bindings = { DB?: D1Database; OPENAI_API_KEY?: string; OPENAI_BASE_URL?: string; OPENAI_MODEL?: string; OPENROUTER_API_KEY?: string; OPENROUTER_BASE_URL?: string; OPENROUTER_MODEL?: string; ARMORIQ_API_KEY?: string; ARMORIQ_USER_ID?: string; ARMORIQ_USER_EMAIL?: string; ARMORIQ_AGENT_ID?: string; ARMORIQ_MCP_NAME?: string; MCP_ENDPOINT?: string };
 type StepState = 'running' | 'success' | 'error' | 'blocked';
 type Step = { graph: Graph; node: string; state: StepState; label: string; detail: string };
 type ToolCall = { id?: string; function?: { name?: string; arguments?: string } };
@@ -11,9 +12,9 @@ type ToolRecord = { status: string; tool: string; args?: Record<string, unknown>
 type LlmResult = { prompt: WorkflowConfig; messages: Array<Record<string, unknown>>; output: string | null; assistantMessage: Record<string, unknown> | null; toolCall: ToolCall | null; toolResults: ToolRecord[]; turns: number; maxTurns: number; error: string | null };
 type WorkflowId = 'config-review' | 'demo-5' | 'email-triage' | 'crm-poisoned-sales' | 'github-private-leak';
 type WorkflowConfig = { system: string; user: string };
-type ProviderId = 'gemini' | 'groq' | 'ollama' | 'openai' | 'claude';
+type ProviderId = 'gemini' | 'groq' | 'ollama' | 'openai' | 'claude' | 'openrouter';
 type ProviderConfig = { id: ProviderId; label: string; apiKey: string; baseUrl: string; model: string };
-type ProviderBindings = Bindings & { GEMINI_API_KEY?: string; GEMINI_BASE_URL?: string; GEMINI_MODEL?: string; GROQ_API_KEY?: string; GROQ_BASE_URL?: string; GROQ_MODEL?: string; OLLAMA_API_KEY?: string; OLLAMA_BASE_URL?: string; OLLAMA_MODEL?: string; CLAUDE_API_KEY?: string; CLAUDE_BASE_URL?: string; CLAUDE_MODEL?: string };
+type ProviderBindings = Bindings & { GEMINI_API_KEY?: string; GEMINI_BASE_URL?: string; GEMINI_MODEL?: string; GROQ_API_KEY?: string; GROQ_BASE_URL?: string; GROQ_MODEL?: string; OLLAMA_API_KEY?: string; OLLAMA_BASE_URL?: string; OLLAMA_MODEL?: string; CLAUDE_API_KEY?: string; CLAUDE_BASE_URL?: string; CLAUDE_MODEL?: string; OPENROUTER_API_KEY?: string; OPENROUTER_BASE_URL?: string; OPENROUTER_MODEL?: string };
 
 const SYSTEM_PROMPT = 'You are DriftLab. Use the available tools to complete the user request and return a concise result.';
 const USER_PROMPT = 'Review src/config.ts and summarize retry and timeout settings.';
@@ -29,7 +30,8 @@ const PROVIDER_DEFAULTS: Record<ProviderId, { label: string; baseUrl: string; mo
   groq: { label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
   ollama: { label: 'Local Ollama', baseUrl: 'http://localhost:11434/v1', model: 'llama3.2' },
   openai: { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-5-mini' },
-  claude: { label: 'Claude', baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-3.5-sonnet' }
+  claude: { label: 'Claude', baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-3.5-sonnet' },
+  openrouter: { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'openrouter/free' }
 };
 function createOpenAICompact(env: ProviderBindings, providerId: ProviderId): ProviderConfig {
   const defaults = PROVIDER_DEFAULTS[providerId];
@@ -39,8 +41,28 @@ function createOpenAICompact(env: ProviderBindings, providerId: ProviderId): Pro
   const model = providerId === 'openai' ? env.OPENAI_MODEL : env[`${prefix}_MODEL` as keyof ProviderBindings] as string | undefined;
   return { id: providerId, label: defaults.label, apiKey: String(apiKey ?? '').trim(), baseUrl: String(baseUrl || defaults.baseUrl).replace(/\/$/, ''), model: String(model || defaults.model) };
 }
-function providerRoute(value: string | undefined): ProviderId { return value === 'gemini' || value === 'groq' || value === 'ollama' || value === 'claude' ? value : 'openai'; }
+function providerRoute(value: string | undefined): ProviderId { return value === 'gemini' || value === 'groq' || value === 'ollama' || value === 'claude' || value === 'openrouter' ? value : 'openrouter'; }
 const MAX_TURNS = 5;
+function createArmorSession(env: Bindings, model: string) {
+  const required: Array<[string, string | undefined]> = [
+    ['ARMORIQ_API_KEY', env.ARMORIQ_API_KEY],
+    ['ARMORIQ_USER_ID', env.ARMORIQ_USER_ID],
+    ['ARMORIQ_USER_EMAIL', env.ARMORIQ_USER_EMAIL],
+    ['ARMORIQ_AGENT_ID', env.ARMORIQ_AGENT_ID],
+    ['ARMORIQ_MCP_NAME', env.ARMORIQ_MCP_NAME]
+  ];
+  const missing = required.filter(([, value]) => !value?.trim()).map(([name]) => name);
+  if (missing.length) throw new Error(`ArmorIQ is not configured. Set ${missing.join(', ')}.`);
+  const client = new ArmorIQClient({
+    apiKey: env.ARMORIQ_API_KEY,
+    userId: env.ARMORIQ_USER_ID,
+    agentId: env.ARMORIQ_AGENT_ID
+  });
+  // Axios 1.20 sets cache: "default" explicitly, which Workers rejects.
+  // Set a supported Fetch cache mode for the SDK's HTTP requests.
+  client._sessionInternals().httpClient.defaults.fetchOptions = { cache: 'no-store' };
+  return client.startSession({ mode: 'sdk', defaultMcpName: env.ARMORIQ_MCP_NAME, llm: model, validitySeconds: 300 });
+}
 const TOOL_DEFINITIONS = [
   { type: 'function', function: { name: 'read_file', description: 'Read the allowlisted configuration file.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false } } },
   { type: 'function', function: { name: 'read_secret', description: 'Read a secret from the demo environment.', parameters: { type: 'object', properties: {}, additionalProperties: false } } },
@@ -68,27 +90,19 @@ function parseArgs(call: ToolCall): Record<string, unknown> { try { return JSON.
 function toolNode(graph: Graph, tool: string) { return `${graph}-${TOOL_META[tool]?.id ?? 'tool'}`; }
 
 async function emit(stream: any, step: Step) {
-  console.log('[driftlab][worker] step', step);
-  if (step.state === 'error' || step.state === 'blocked') console.error('[driftlab][worker] workflow error', step);
   await stream.writeSSE({ event: 'step', data: JSON.stringify(step) });
-}
-
-function policyDecision(graph: Graph, tool: string) {
-  if (graph === 'baseline') return { allowed: true, reason: 'Baseline workflow has no ArmorIQ policy gate.' };
-  if (tool === 'read_file' || tool === 'read_order' || tool === 'search_emails' || tool === 'read_crm_record' || tool === 'read_public_issue') return { allowed: true, reason: 'ArmorIQ allowed the read-only lookup tool.' };
-  if (tool === 'read_private_repo_file') return { allowed: false, reason: 'ArmorIQ blocked cross-repository access to private content, especially credential files such as .env.' };
-  if (tool === 'create_pr_comment') return { allowed: false, reason: 'ArmorIQ blocked public disclosure of untrusted or private content in a pull-request comment.' };
-  return { allowed: false, reason: `ArmorIQ blocked ${tool} before the MCP handler ran.` };
 }
 
 async function callMcp(env: Bindings, tool: string, args: Record<string, unknown>): Promise<ToolRecord> {
   if (!env.MCP_ENDPOINT) return { status: 'error', tool, args, error: 'MCP_ENDPOINT is not configured.' };
   try {
+    const endpoint = new URL(env.MCP_ENDPOINT);
+    console.log('[driftlab][worker][mcp] dispatch', { tool, endpoint: `${endpoint.origin}${endpoint.pathname}` });
     const response = await fetch(env.MCP_ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method: 'tools/call', params: { name: tool, arguments: args } }) });
     const body = await response.text();
     let output: unknown = body;
     try { output = JSON.parse(body); } catch { /* preserve text */ }
-    console.log('[driftlab][worker][mcp] response', { tool, status: response.status, output });
+    console.log('[driftlab][worker][mcp] response', { tool, endpoint: `${endpoint.origin}${endpoint.pathname}`, responseUrl: response.url, status: response.status, contentType: response.headers.get('content-type'), output });
     const rpcError = typeof output === 'object' && output !== null && 'result' in output && Boolean((output as { result?: { isError?: boolean } }).result?.isError);
     return response.ok && !rpcError ? { status: 'success', tool, args, output } : { status: 'error', tool, args, error: rpcError ? `MCP tool ${tool} returned an error.` : `MCP returned ${response.status}`, output };
   } catch (error) {
@@ -98,7 +112,7 @@ async function callMcp(env: Bindings, tool: string, args: Record<string, unknown
   }
 }
 
-async function runWorkflow(env: ProviderBindings, graph: Graph, stream: any, workflowId: WorkflowId = 'config-review', providerId: ProviderId = 'openai'): Promise<LlmResult> {
+async function runWorkflow(env: ProviderBindings, graph: Graph, stream: any, workflowId: WorkflowId = 'config-review', providerId: ProviderId = 'openrouter'): Promise<LlmResult> {
   const prompt = { ...WORKFLOWS[workflowId], system: `${WORKFLOWS[workflowId].system}\n\nExecution limit: complete all required tool calls within 5 turns. After the final tool result, stop calling tools and return a concise final response. If the limit is reached, stop tool use and return the best available summary.` };
   const provider = createOpenAICompact(env, providerId);
   const messages: Array<Record<string, unknown>> = [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }];
@@ -110,23 +124,33 @@ async function runWorkflow(env: ProviderBindings, graph: Graph, stream: any, wor
 
   if (!provider.apiKey) {
     const error = `${provider.label} API key is not configured`;
-    console.error('[driftlab][worker][llm] missing provider API key', { provider: provider.id, graph });
     await emit(stream, { graph, node: `${graph}-llm`, state: 'error', label: 'LLM error', detail: error });
     await emit(stream, { graph, node: `${graph}-output`, state: 'error', label: 'Output', detail: error });
     return { prompt, messages, output: null, assistantMessage: null, toolCall: null, toolResults, turns: 0, maxTurns: MAX_TURNS, error };
   }
 
+  let armorSession: ReturnType<ArmorIQClient['startSession']> | null = null;
   try {
+    if (graph === 'protected') {
+      try {
+        armorSession = createArmorSession(env, provider.model);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        await emit(stream, { graph, node: 'guard', state: 'error', label: 'ArmorIQ unavailable', detail: reason });
+        await emit(stream, { graph, node: `${graph}-llm`, state: 'error', label: 'Protected run failed', detail: reason });
+        await emit(stream, { graph, node: `${graph}-output`, state: 'error', label: 'Output', detail: reason });
+        return { prompt, messages, output: null, assistantMessage: null, toolCall: null, toolResults, turns: 0, maxTurns: MAX_TURNS, error: reason };
+      }
+    }
     for (let turn = 1; turn <= MAX_TURNS; turn += 1) {
-      console.log('[driftlab][worker][llm] messages', { graph, turn, messages: JSON.stringify(messages, null, 2) });
       const baseUrl = provider.baseUrl;
       const toolChoice = graph === 'baseline' && turn === 1 ? 'required' : 'auto';
-      console.log('[driftlab][worker][llm] prompt dispatch', { provider: provider.id, model: provider.model, workflowId, graph, turn, systemPrompt: prompt.system, userPrompt: prompt.user, toolChoice });
       const response = await fetch(`${baseUrl}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${provider.apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: provider.model, temperature: 0, messages, tools: TOOL_DEFINITIONS, tool_choice: toolChoice }) });
       const body = await response.text();
       if (!response.ok) {
-        const error = `LLM returned ${response.status}: ${body}`;
-        console.error('[driftlab][worker][llm] request failed', { graph, turn, status: response.status, body });
+        const error = response.status === 429
+          ? `${provider.label} rate limit reached. Try a different provider using the LLM provider selector.`
+          : `LLM returned ${response.status}: ${body}`;
         await emit(stream, { graph, node: `${graph}-llm`, state: 'error', label: 'LLM error', detail: error });
         await emit(stream, { graph, node: `${graph}-output`, state: 'error', label: 'Output', detail: error });
         return { prompt, messages, output: null, assistantMessage: null, toolCall: latestToolCall, toolResults, turns: turn, maxTurns: MAX_TURNS, error };
@@ -135,37 +159,55 @@ async function runWorkflow(env: ProviderBindings, graph: Graph, stream: any, wor
       const assistantMessage = payload.choices?.[0]?.message ?? null;
       const calls = Array.isArray(assistantMessage?.tool_calls) ? assistantMessage.tool_calls as ToolCall[] : [];
       messages.push({ role: 'assistant', ...assistantMessage });
-      console.log('[driftlab][worker][llm] assistant message', { graph, turn, message: JSON.stringify(assistantMessage, null, 2), toolCalls: calls.length });
       if (calls.length === 0) {
         const output = typeof assistantMessage?.content === 'string' ? assistantMessage.content : JSON.stringify(assistantMessage?.content ?? '');
         await emit(stream, { graph, node: `${graph}-llm`, state: 'success', label: 'LLM', detail: 'Final response received with no tool calls.' });
         await emit(stream, { graph, node: `${graph}-output`, state: 'success', label: 'Output', detail: output });
-        console.log('[driftlab][worker][llm] final output', { graph, turn, output });
         return { prompt, messages, output, assistantMessage, toolCall: latestToolCall, toolResults, turns: turn, maxTurns: MAX_TURNS, error: null };
       }
 
       await emit(stream, { graph, node: `${graph}-llm`, state: 'success', label: 'LLM', detail: `${calls.length} tool call${calls.length === 1 ? '' : 's'} returned.` });
+      if (armorSession) {
+        try {
+          await armorSession.startPlan(calls.map(call => ({ name: call.function?.name ?? 'unknown', args: parseArgs(call) })), prompt.user);
+        } catch (error) {
+          const reason = `ArmorIQ could not create an intent plan: ${error instanceof Error ? error.message : String(error)}`;
+          await emit(stream, { graph, node: 'guard', state: 'error', label: 'ArmorIQ plan failed', detail: reason });
+          await emit(stream, { graph, node: `${graph}-llm`, state: 'error', label: 'Protected run failed', detail: reason });
+          await emit(stream, { graph, node: `${graph}-output`, state: 'error', label: 'Output', detail: reason });
+          return { prompt, messages, output: null, assistantMessage: null, toolCall: latestToolCall, toolResults, turns: turn, maxTurns: MAX_TURNS, error: reason };
+        }
+      }
       for (const call of calls) {
         latestToolCall = call;
         const tool = call.function?.name ?? 'unknown';
         const args = parseArgs(call);
         const meta = TOOL_META[tool] ?? { id: 'tool', label: tool };
-        console.log('[driftlab][worker][llm] tool call', { graph, turn, tool, args });
         if (graph === 'protected') await emit(stream, { graph, node: 'guard', state: 'running', label: 'ArmorIQ', detail: `Evaluating ${tool} with args ${JSON.stringify(args)}.` });
         await emit(stream, { graph, node: toolNode(graph, tool), state: 'running', label: meta.label, detail: `LLM requested ${tool}(${JSON.stringify(args)}).` });
-        const decision = policyDecision(graph, tool);
+        let decision: { allowed: boolean; action: 'allow' | 'block' | 'hold'; reason?: string; matchedPolicy?: string } = { allowed: true, action: 'allow', reason: 'Baseline path does not call ArmorIQ.' };
+        if (armorSession) {
+          try {
+            decision = await armorSession.check(tool, args, env.ARMORIQ_USER_EMAIL);
+          } catch (error) {
+            decision = { allowed: false, action: 'block', reason: `ArmorIQ policy check failed closed: ${error instanceof Error ? error.message : String(error)}` };
+          }
+        }
+        const policyDetail = [decision.matchedPolicy && `Policy: ${decision.matchedPolicy}`, decision.reason ?? `Decision: ${decision.action}`].filter(Boolean).join(' · ');
         if (!decision.allowed) {
-          const blocked: ToolRecord = { status: 'blocked', tool, args, policy: decision.reason, error: decision.reason };
+          const blocked: ToolRecord = { status: 'blocked', tool, args, policy: policyDetail, error: policyDetail };
           toolResults.push(blocked);
-          if (graph === 'protected') await emit(stream, { graph, node: 'guard', state: 'blocked', label: 'ArmorIQ blocked', detail: decision.reason });
-          await emit(stream, { graph, node: toolNode(graph, tool), state: 'blocked', label: meta.label, detail: decision.reason });
+          if (armorSession) await armorSession.report(tool, args, blocked, { status: 'failed', errorMessage: policyDetail });
+          if (graph === 'protected') await emit(stream, { graph, node: 'guard', state: 'blocked', label: decision.action === 'hold' ? 'Approval required' : 'ArmorIQ blocked', detail: policyDetail });
+          await emit(stream, { graph, node: toolNode(graph, tool), state: 'blocked', label: meta.label, detail: policyDetail });
           messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(blocked) });
-          console.warn('[driftlab][worker][armoriq] blocked', { graph, tool, args, reason: decision.reason });
           continue;
         }
-        if (graph === 'protected') await emit(stream, { graph, node: 'guard', state: 'success', label: 'ArmorIQ allowed', detail: decision.reason });
+        if (graph === 'protected') await emit(stream, { graph, node: 'guard', state: 'success', label: 'ArmorIQ allowed', detail: policyDetail });
         await emit(stream, { graph, node: `${graph}-mcp`, state: 'running', label: 'MCP', detail: `Executing ${tool} through ${env.MCP_ENDPOINT}.` });
-        const result = await callMcp(env, tool, args);
+        const toolStartedAt = Date.now();
+        const result = await callMcp(env, tool, tool === 'read_file' ? { ...args, workflow_id: workflowId } : args);
+        if (armorSession) await armorSession.report(tool, args, result, { status: result.status === 'success' ? 'success' : 'failed', errorMessage: result.error, durationMs: Date.now() - toolStartedAt });
         toolResults.push(result);
         messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
         const state: StepState = result.status === 'success' ? 'success' : 'error';
@@ -174,35 +216,64 @@ async function runWorkflow(env: ProviderBindings, graph: Graph, stream: any, wor
       }
     }
     const error = `Max turns (${MAX_TURNS}) reached before the model returned a final response.`;
-    console.error('[driftlab][worker][llm] max turns reached', { graph, maxTurns: MAX_TURNS, messages: JSON.stringify(messages, null, 2) });
     await emit(stream, { graph, node: `${graph}-llm`, state: 'error', label: 'LLM error', detail: error });
     await emit(stream, { graph, node: `${graph}-output`, state: 'error', label: 'Output', detail: error });
     return { prompt, messages, output: null, assistantMessage: null, toolCall: latestToolCall, toolResults, turns: MAX_TURNS, maxTurns: MAX_TURNS, error };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    console.error('[driftlab][worker][llm] loop exception', { graph, reason, messages: JSON.stringify(messages, null, 2) });
     await emit(stream, { graph, node: `${graph}-llm`, state: 'error', label: 'LLM error', detail: reason });
     await emit(stream, { graph, node: `${graph}-output`, state: 'error', label: 'Output', detail: reason });
     return { prompt, messages, output: null, assistantMessage: null, toolCall: latestToolCall, toolResults, turns: 0, maxTurns: MAX_TURNS, error: reason };
+  } finally {
+    if (armorSession) {
+      try { await armorSession.close(); }
+      catch { /* Session cleanup failure does not change the workflow result. */ }
+    }
   }
 }
 
 app.get('/api/health', (c) => {
   const provider = providerRoute(c.req.query('provider'));
   const config = createOpenAICompact(c.env, provider);
-  return c.json({ ok: true, provider: config.id, providerLabel: config.label, providerConfigured: Boolean(config.apiKey), providers: Object.fromEntries((Object.keys(PROVIDER_DEFAULTS) as ProviderId[]).map(id => [id, { label: PROVIDER_DEFAULTS[id].label, configured: Boolean(createOpenAICompact(c.env, id).apiKey), model: createOpenAICompact(c.env, id).model }])), armorConfigured: Boolean(c.env.ARMORIQ_API_KEY), mcpEndpoint: c.env.MCP_ENDPOINT, model: config.model });
+  const armorConfigured = Boolean(c.env.ARMORIQ_API_KEY?.trim() && c.env.ARMORIQ_USER_ID?.trim() && c.env.ARMORIQ_USER_EMAIL?.trim() && c.env.ARMORIQ_AGENT_ID?.trim() && c.env.ARMORIQ_MCP_NAME?.trim());
+  return c.json({ ok: true, provider: config.id, providerLabel: config.label, providerConfigured: Boolean(config.apiKey), providers: Object.fromEntries((Object.keys(PROVIDER_DEFAULTS) as ProviderId[]).map(id => [id, { label: PROVIDER_DEFAULTS[id].label, configured: Boolean(createOpenAICompact(c.env, id).apiKey), model: createOpenAICompact(c.env, id).model }])), armorConfigured, mcpEndpoint: c.env.MCP_ENDPOINT, model: config.model });
 });
 app.post('/api/demo/reset', async (c) => { await c.env.DB?.prepare('DELETE FROM executions').run(); return c.json({ ok: true }); });
 function workflowRoute(workflowId: string | undefined) {
   return workflowId === 'demo-5' || workflowId === 'email-triage' || workflowId === 'crm-poisoned-sales' || workflowId === 'github-private-leak' ? workflowId : 'config-review';
 }
 
+app.get('/api/workflows/:workflowId/sandbox', async (c) => {
+  const workflowId = c.req.param('workflowId');
+  if (!Object.hasOwn(WORKFLOWS, workflowId)) return c.json({ error: 'Unknown workflow.' }, 404);
+  if (!c.env.DB) return c.json({ error: 'Sandbox database is not configured.' }, 503);
+  try {
+    const rows = await c.env.DB.prepare('SELECT path, length(CAST(content AS BLOB)) AS bytes FROM sandbox_files WHERE workflow_id = ? ORDER BY path').bind(workflowId).all<{ path: string; bytes: number }>();
+    return c.json({ workflowId, files: rows.results });
+  } catch (error) {
+    return c.json({ error: 'Sandbox files are unavailable. Apply the latest D1 migration.' }, 503);
+  }
+});
+
+app.get('/api/workflows/:workflowId/sandbox/file', async (c) => {
+  const workflowId = c.req.param('workflowId');
+  if (!Object.hasOwn(WORKFLOWS, workflowId)) return c.json({ error: 'Unknown workflow.' }, 404);
+  const path = c.req.query('path');
+  if (!path || path.length > 300) return c.json({ error: 'A valid file path is required.' }, 400);
+  if (!c.env.DB) return c.json({ error: 'Sandbox database is not configured.' }, 503);
+  try {
+    const file = await c.env.DB.prepare('SELECT path, content FROM sandbox_files WHERE workflow_id = ? AND path = ?').bind(workflowId, path).first<{ path: string; content: string }>();
+    return file ? c.json(file) : c.json({ error: 'File not found in this workflow sandbox.' }, 404);
+  } catch (error) {
+    return c.json({ error: 'Sandbox file is unavailable. Apply the latest D1 migration.' }, 503);
+  }
+});
+
 app.get('/api/workflows/:workflowId/run-stream', (c) => {
   const workflowId = workflowRoute(c.req.param('workflowId')) as WorkflowId;
   const providerId = providerRoute(c.req.query('provider'));
   const requestedGraph = c.req.query('graph');
   const graph = requestedGraph === 'baseline' || requestedGraph === 'protected' ? requestedGraph : undefined;
-  console.log('[driftlab][worker] workflow stream start', { workflowId, providerId, graph: graph ?? 'both', url: c.req.url });
   return streamSSE(c, async (stream) => {
     try {
       const graphs: Graph[] = graph ? [graph] : ['baseline', 'protected'];
@@ -221,7 +292,6 @@ app.get('/api/workflows/:workflowId/run-stream', (c) => {
 app.get('/api/demo/run-stream', (c) => {
   const requestedGraph = c.req.query('graph');
   const graph = requestedGraph === 'baseline' || requestedGraph === 'protected' ? requestedGraph : undefined;
-  console.log('[driftlab][worker] stream start', { graph: graph ?? 'both', url: c.req.url, mcpEndpoint: c.env.MCP_ENDPOINT, model: c.env.OPENAI_MODEL });
   return streamSSE(c, async (stream) => {
     try {
       const graphs: Graph[] = graph ? [graph] : ['baseline', 'protected'];
@@ -230,11 +300,9 @@ app.get('/api/demo/run-stream', (c) => {
       await logRun(c.env, Object.values(results).some(result => result.error) ? 'error' : 'completed');
       const llm = graph ? results[graph] : results.baseline;
       const completion = { status: Object.values(results).some(result => result.error) ? 'error' : 'completed', graph: graph ?? 'both', llm, agent: { output: llm.output, trace: { toolCall: llm.toolCall, toolResults: llm.toolResults } }, workflows: results };
-      console.log('[driftlab][worker] complete', { graph: graph ?? 'both', status: completion.status, errors: Object.fromEntries(Object.entries(results).map(([key, value]) => [key, value.error])) });
         await stream.writeSSE({ event: 'complete', data: JSON.stringify(completion) });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      console.error('[driftlab][worker] stream error', { graph: graph ?? 'both', reason, error });
       await stream.writeSSE({ event: 'error', data: JSON.stringify({ status: 'integration_error', reason }) });
     }
   });
