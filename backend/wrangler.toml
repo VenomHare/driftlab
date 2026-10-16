@@ -6,8 +6,8 @@ compatibility_date = "2026-10-15"
 
 [env.dev.vars]
 MCP_ENDPOINT = "http://localhost:8787/mcp"
-OPENAI_BASE_URL = "https://api.groq.com/openai/v1"
-OPENAI_MODEL = "qwen/qwen3.8-27b"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+OPENAI_MODEL = "gpt-5-mini"
 
 [[env.dev.d1_databases]]
 binding = "DB"
@@ -19,9 +19,9 @@ migrations_dir = "migrations"
 port = 8788
 
 [vars]
-MCP_ENDPOINT = "https://driftlab-mcp.example.workers.dev/mcp"
-OPENAI_BASE_URL = "https://api.groq.com/openai/v1"
-OPENAI_MODEL = "qwen/qwen3.8-27b"
+MCP_ENDPOINT = "https://driftlab-mcp.sarthakkadam147.workers.dev"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+OPENAI_MODEL = "gpt-5-mini"
 
 [[d1_databases]]
 binding = "DB"

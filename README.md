@@ -109,27 +109,31 @@ wrangler d1 create driftlab
 
 Copy the returned database ID into both `backend/wrangler.toml` and `mcp/wrangler.toml`.
 
-Apply the schema locally:
+Apply the schema to both local Worker D1 instances:
 
 ```bash
-wrangler d1 migrations apply driftlab --local --config backend/wrangler.toml
+bun run --cwd backend migrate:local
+bun run --cwd mcp migrate:local
 ```
 
-Apply it remotely after authentication:
+Apply it to the remote D1 database after authentication. Run both commands because each Worker owns a D1 binding:
 
 ```bash
-wrangler d1 migrations apply driftlab --remote --config backend/wrangler.toml
+bun run --cwd backend migrate:remote
+bun run --cwd mcp migrate:remote
 ```
 
 The schema stores execution records and MCP tool-call records.
 
 The MCP tools use D1 as the Cloudflare-compatible sandbox. Migration `0002_seed_worker_sandbox.sql` creates real sandbox files (`src/config.ts` and `README.md`), a demo secret, an email outbox, and CRM contacts. `read_file` queries those rows; it does not use Node filesystem APIs, because a deployed Worker cannot read an arbitrary repository folder.
 
-After changing the migration, apply it locally and remotely:
+After changing a migration, apply it to both Worker bindings:
 
 ```bash
-wrangler d1 migrations apply driftlab --local --config backend/wrangler.toml
-wrangler d1 migrations apply driftlab --remote --config backend/wrangler.toml
+bun run --cwd backend migrate:local
+bun run --cwd mcp migrate:local
+bun run --cwd backend migrate:remote
+bun run --cwd mcp migrate:remote
 ```
 
 ## Deploy to Cloudflare

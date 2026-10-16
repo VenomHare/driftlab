@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --config wrangler.toml",
+    "migrate:local": "wrangler d1 migrations apply driftlab --local --config wrangler.toml",
+    "migrate:remote": "wrangler d1 migrations apply driftlab --remote --config wrangler.toml",
     "deploy": "wrangler deploy --config wrangler.toml",
     "typecheck": "tsc --noEmit"
   },
