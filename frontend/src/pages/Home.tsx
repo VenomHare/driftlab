@@ -41,7 +41,7 @@ export default function Home() {
               <h1 id="home-title">Agent security is not about what an agent says. It is about what it is allowed to do.</h1>
               <p>Driftlab is a browser-based red-team demo. It runs a prompt-injection attack against two agents side by side: one unprotected, one protected by ArmorIQ.</p>
               <div className="home-actions">
-                <Link className="home-button" to="/workflow">Run the attack demo</Link>
+                <Link className="home-button" to="/workflow">Run the attack</Link>
                 <a className="home-secondary" href="#how">See how it works</a>
               </div>
             </div>
@@ -88,7 +88,7 @@ export default function Home() {
         </section>
 
         <section className="home-closing home-grid" aria-label="Run the demo">
-          <div className="home-prose"><p>See the difference in one run.</p><Link className="home-button" to="/workflow">Run the attack demo</Link></div>
+          <div className="home-prose"><p>See the difference in one run.</p><Link className="home-button" to="/workflow">Run the attack</Link></div>
         </section>
       </main>
 

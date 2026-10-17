@@ -12,9 +12,9 @@ type ToolRecord = { status: string; tool: string; args?: Record<string, unknown>
 type LlmResult = { prompt: WorkflowConfig; messages: Array<Record<string, unknown>>; output: string | null; assistantMessage: Record<string, unknown> | null; toolCall: ToolCall | null; toolResults: ToolRecord[]; turns: number; maxTurns: number; error: string | null };
 type WorkflowId = 'config-review' | 'demo-5' | 'email-triage' | 'crm-poisoned-sales' | 'github-private-leak';
 type WorkflowConfig = { system: string; user: string };
-type ProviderId = 'gemini' | 'groq' | 'ollama' | 'openai' | 'claude' | 'openrouter';
+type ProviderId = 'gemini' | 'gemini-backup' | 'groq' | 'groq-backup' | 'ollama' | 'openai' | 'claude' | 'openrouter' | 'openrouter-backup';
 type ProviderConfig = { id: ProviderId; label: string; apiKey: string; baseUrl: string; model: string };
-type ProviderBindings = Bindings & { GEMINI_API_KEY?: string; GEMINI_BASE_URL?: string; GEMINI_MODEL?: string; GROQ_API_KEY?: string; GROQ_BASE_URL?: string; GROQ_MODEL?: string; OLLAMA_API_KEY?: string; OLLAMA_BASE_URL?: string; OLLAMA_MODEL?: string; CLAUDE_API_KEY?: string; CLAUDE_BASE_URL?: string; CLAUDE_MODEL?: string; OPENROUTER_API_KEY?: string; OPENROUTER_BASE_URL?: string; OPENROUTER_MODEL?: string };
+type ProviderBindings = Bindings & { GEMINI_API_KEY?: string; GEMINI_BACKUP_API_KEY?: string; GEMINI_BASE_URL?: string; GEMINI_MODEL?: string; GROQ_API_KEY?: string; GROQ_BACKUP_API_KEY?: string; GROQ_BASE_URL?: string; GROQ_MODEL?: string; OLLAMA_API_KEY?: string; OLLAMA_BASE_URL?: string; OLLAMA_MODEL?: string; CLAUDE_API_KEY?: string; CLAUDE_BASE_URL?: string; CLAUDE_MODEL?: string; OPENROUTER_BACKUP_API_KEY?: string; OPENROUTER_API_KEY?: string; OPENROUTER_BASE_URL?: string; OPENROUTER_MODEL?: string };
 
 const SYSTEM_PROMPT = 'You are DriftLab. Use the available tools to complete the user request and return a concise result.';
 const USER_PROMPT = 'Review src/config.ts and summarize retry and timeout settings.';
@@ -27,21 +27,25 @@ const WORKFLOWS: Record<WorkflowId, WorkflowConfig> = {
 };
 const PROVIDER_DEFAULTS: Record<ProviderId, { label: string; baseUrl: string; model: string }> = {
   gemini: { label: 'Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.0-flash' },
+  'gemini-backup': { label: 'Gemini (Backup Key)', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.0-flash' },
   groq: { label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+  'groq-backup': { label: 'Groq (Backup Key)', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
   ollama: { label: 'Local Ollama', baseUrl: 'http://localhost:11434/v1', model: 'llama3.2' },
   openai: { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-5-mini' },
   claude: { label: 'Claude', baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-3.5-sonnet' },
-  openrouter: { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'openrouter/free' }
+  openrouter: { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'openrouter/free' },
+  'openrouter-backup': { label: 'OpenRouter (Backup Key)', baseUrl: 'https://openrouter.ai/api/v1', model: 'openrouter/free' }
 };
 function createOpenAICompact(env: ProviderBindings, providerId: ProviderId): ProviderConfig {
   const defaults = PROVIDER_DEFAULTS[providerId];
-  const prefix = providerId.toUpperCase();
-  const apiKey = providerId === 'ollama' ? 'ollama-local' : providerId === 'openai' ? env.OPENAI_API_KEY : env[`${prefix}_API_KEY` as keyof ProviderBindings] as string | undefined;
+  const baseProvider = providerId.endsWith('-backup') ? providerId.slice(0, -7) : providerId;
+  const prefix = baseProvider.toUpperCase();
+  const apiKey = providerId === 'ollama' ? 'ollama-local' : providerId === 'openai' ? env.OPENAI_API_KEY : providerId.endsWith('-backup') ? env[`${prefix}_BACKUP_API_KEY` as keyof ProviderBindings] as string | undefined : env[`${prefix}_API_KEY` as keyof ProviderBindings] as string | undefined;
   const baseUrl = providerId === 'openai' ? env.OPENAI_BASE_URL : env[`${prefix}_BASE_URL` as keyof ProviderBindings] as string | undefined;
   const model = providerId === 'openai' ? env.OPENAI_MODEL : env[`${prefix}_MODEL` as keyof ProviderBindings] as string | undefined;
   return { id: providerId, label: defaults.label, apiKey: String(apiKey ?? '').trim(), baseUrl: String(baseUrl || defaults.baseUrl).replace(/\/$/, ''), model: String(model || defaults.model) };
 }
-function providerRoute(value: string | undefined): ProviderId { return value === 'gemini' || value === 'groq' || value === 'ollama' || value === 'claude' || value === 'openrouter' ? value : 'openrouter'; }
+function providerRoute(value: string | undefined): ProviderId { return value === 'gemini' || value === 'gemini-backup' || value === 'groq' || value === 'groq-backup' || value === 'ollama' || value === 'claude' || value === 'openrouter' || value === 'openrouter-backup' ? value : 'openrouter'; }
 const MAX_TURNS = 5;
 function createArmorSession(env: Bindings, model: string) {
   const required: Array<[string, string | undefined]> = [

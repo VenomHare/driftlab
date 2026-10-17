@@ -21,11 +21,14 @@ const DEFAULT_TRACE: LlmTrace = { systemPrompt: workflows[0].systemPrompt, userP
 const isProductionEnv = import.meta.env.PROD || (import.meta.env as ImportMetaEnv & { ENV?: string }).ENV === 'prod';
 const providers = [
   { id: 'gemini', label: 'Gemini', model: 'gemini-2.0-flash' },
+  { id: 'gemini-backup', label: 'Gemini (Backup Key)', model: 'gemini-2.0-flash' },
   { id: 'groq', label: 'Groq', model: 'llama-3.3-70b-versatile' },
+  { id: 'groq-backup', label: 'Groq (Backup Key)', model: 'llama-3.3-70b-versatile' },
   // { id: 'openai', label: 'OpenAI', model: 'gpt-5-mini' },
   // { id: 'claude', label: 'Claude', model: 'anthropic/claude-3.5-sonnet' },
   ...(!isProductionEnv ? [{ id: 'ollama', label: 'Local Ollama', model: 'llama3.2' } as const] : []),
-  { id: 'openrouter', label: 'OpenRouter', model: 'openrouter/free' }
+  { id: 'openrouter', label: 'OpenRouter', model: 'openrouter/free' },
+  { id: 'openrouter-backup', label: 'OpenRouter (Backup Key)', model: 'openrouter/free' }
 ] as const;
 type ProviderId = typeof providers[number]['id'];
 const providerFor = (id: ProviderId) => providers.find(provider => provider.id === id) ?? providers[0];

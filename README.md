@@ -1,178 +1,93 @@
 # DriftLab
 
-DriftLab is a small security demo for AI agents.
+**See what changes when an AI agent’s tool calls are checked before they run.** DriftLab is an interactive security demo that compares an unprotected agent workflow with one guarded by ArmorIQ.
 
-It shows the same prompt moving through two agent loops:
+## Live demo
 
-1. **Without ArmorIQ** — the LLM can call MCP tools directly.
-2. **With ArmorIQ** — ArmorIQ checks the tool plan before MCP can run a tool.
+- **App:** [driftlab-pages.pages.dev](https://driftlab-pages.pages.dev/)
+- **API:** [driftlab-api.sarthakkadam147.workers.dev](https://driftlab-api.sarthakkadam147.workers.dev/)
+- **MCP endpoint:** [driftlab-mcp.sarthakkadam147.workers.dev/mcp](https://driftlab-mcp.sarthakkadam147.workers.dev/mcp)
 
-The canvas shows:
+Open the app, choose a workflow and model provider, then run both paths to compare their results. Select graph nodes to inspect prompts, tool calls, and outputs. The sandbox view shows the files available to the selected workflow.
+
+## What it demonstrates
+
+DriftLab runs the same workflow in two modes:
+
+1. **Unprotected:** the model can request tools directly through the MCP server.
+2. **ArmorIQ-protected:** the API checks the planned tool calls against ArmorIQ policy before forwarding them to MCP.
+
+The demo makes policy decisions visible in the workflow graph and event log. For the sample workflow, reading an allowed file succeeds while attempts to read a secret, send email, or export CRM data are blocked in the protected run. The unprotected run illustrates what those tool calls can do without the policy check.
+
+All sample data is fictional. Email and other external actions are simulated; email writes to a test outbox and is not delivered.
+
+## Architecture
 
 ```text
-Prompt → LLM → MCP → tools → Output → LLM
+Browser (React + Vite)
+  └─ Cloudflare Pages
+       └─ API (Hono Worker, streaming events, ArmorIQ policy checks)
+            ├─ MCP server (Hono Worker, tool execution)
+            └─ Cloudflare D1 (workflow files and execution records)
 ```
 
-The protected loop adds ArmorIQ between the LLM and MCP.
+The frontend streams workflow progress from the API over server-sent events. The API coordinates model requests, optional ArmorIQ checks, and MCP tool calls. The API and MCP workers use D1 for the demo sandbox and records.
 
-All demo data is fictional. The email tool writes to a test outbox. It does not send real email.
-
-## Project layout
-
-| Path | Purpose |
+| Directory | Contents |
 |---|---|
-| `frontend/` | React + Vite Pages frontend, with its own package/config |
-| `backend/` | Hono API Worker, with its own package/config |
-| `mcp/` | Hono MCP Worker, with its own package/config |
-| `backend/migrations/` | Cloudflare D1 schema |
-| `frontend/wrangler.toml` | Pages configuration |
-| `backend/wrangler.toml` | API Worker configuration |
-| `mcp/wrangler.toml` | MCP Worker configuration |
+| `frontend/` | React and Vite application, deployed to Cloudflare Pages |
+| `backend/` | Hono API Worker and D1 migrations |
+| `mcp/` | Hono MCP Worker and D1 migrations |
 
-Each package owns its readable source, config, and dependencies. Generated bundles stay inside the package `dist/` directories and should not be edited directly.
+## Run locally
 
-## Install
+Requirements: [Bun](https://bun.sh/), a Cloudflare account with access to the configured D1 database, and Wrangler authentication. The Workers use remote D1 bindings; configure your database IDs in both Worker configurations before applying migrations.
+
+Install each package’s dependencies from the repository root:
 
 ```bash
-cd frontend && bun install
-cd ../backend && bun install
-cd ../mcp && bun install
+bun install --cwd frontend
+bun install --cwd backend
+bun install --cwd mcp
 ```
 
-Wrangler can be installed globally, or run from the local dependency:
+For model access, copy `backend/.env.example` to `backend/.dev.vars` and add credentials for a supported provider. Protected runs also require ArmorIQ credentials and identity values (`ARMORIQ_API_KEY`, `ARMORIQ_USER_ID`, `ARMORIQ_USER_EMAIL`, `ARMORIQ_AGENT_ID`, and `ARMORIQ_MCP_NAME`). Configure the corresponding agent, MCP identity, and policies in ArmorIQ. Keep secrets private and do not commit `.dev.vars`.
 
-```bash
-wrangler --version
-```
-
-## Run locally with React, Vite, and Workers
-
-Use three terminals.
-
-### 1. Start the API Worker
-
-```bash
-bun run dev:backend
-```
-
-The API Worker runs at `http://localhost:8788`.
-
-For local LLM calls, put `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL` in `backend/.env.dev`. The backend dev script starts Wrangler with `--env dev`, so this file is loaded by the API Worker. The key is read only by the API Worker and must not be committed.
-
-### 2. Start the MCP Worker
-
-```bash
-bun run dev:mcp
-```
-
-The MCP Worker runs at `http://localhost:8787`.
-
-### 3. Start the React frontend
-
-The frontend defaults to the local API Worker at `http://localhost:8788` during Vite development:
-
-```bash
-bun run dev:frontend
-```
-
-If the API Worker uses another port, override it with `VITE_API_BASE_URL`.
-
-Open the Vite URL shown in the terminal, normally `http://localhost:5173`.
-
-## What happens when you click “Execute workflow”
-
-1. React opens an `EventSource` connection to `GET /api/demo/run-stream`.
-2. The Hono API Worker starts the demo run.
-3. The Worker sends `event: step` messages as each node runs.
-4. React updates each matching node:
-   - yellow: running
-   - green: allowed or successful
-   - red: blocked or unsafe
-5. The unprotected loop sends tool calls through MCP without a policy check. The secret, email, and CRM actions reach their handlers.
-6. The protected loop sends the same attempts through ArmorIQ:
-   - `read_file` is allowed
-   - `read_secret` is blocked
-   - `email_send` is blocked
-   - `crm_export` is blocked
-7. The Worker writes the execution record to D1.
-8. The Worker sends `event: complete`. React updates the execution bar and closes the stream.
-
-The API also keeps `POST /api/demo/run` for non-streaming clients.
-
-## D1 setup
-
-Create the database once:
-
-```bash
-wrangler d1 create driftlab
-```
-
-Copy the returned database ID into both `backend/wrangler.toml` and `mcp/wrangler.toml`.
-
-Local backend and MCP development both connect to this remote D1 database. Authenticate with Wrangler, then apply migrations to both Worker bindings:
-
-```bash
-bun run --cwd backend migrate:remote
-bun run --cwd mcp migrate:remote
-```
-
-The schema stores execution records and MCP tool-call records.
-
-The MCP tools use D1 as the Cloudflare-compatible sandbox. Migration `0002_seed_worker_sandbox.sql` creates the initial sandbox files, a demo secret, an email outbox, and CRM contacts. Migration `0003_workflow_sandbox_files.sql` scopes files by workflow and adds each workflow's sample files. The View Sandbox drawer lists and reads files through the API Worker; the selected workflow ID is part of every query, so another workflow's files are not returned. The MCP `read_file` tool uses that same workflow scope. Files live in D1 rather than a Worker filesystem, which a deployed Worker cannot browse.
-
-Apply migration `0003_workflow_sandbox_files.sql` to both Worker bindings using the remote migration commands above before using the drawer or `read_file` tool. Local development writes to the shared remote database, so its changes persist there.
-
-After changing a migration, apply it to both Worker bindings:
-
-```bash
-bun run --cwd backend migrate:remote
-bun run --cwd mcp migrate:remote
-```
-
-## Deploy to Cloudflare
+Authenticate and apply the D1 migrations to both Worker bindings:
 
 ```bash
 wrangler login
-wrangler deploy --config backend/wrangler.toml
-wrangler deploy --config mcp/wrangler.toml
+bun run --cwd backend migrate:remote
+bun run --cwd mcp migrate:remote
 ```
 
-Build and deploy the Pages frontend with the deployed API URL:
+Start the API, MCP server, and frontend in separate terminals from the repository root:
 
 ```bash
-VITE_API_BASE_URL=https://driftlab-api.<your-subdomain>.workers.dev bun run build
-wrangler pages deploy frontend/dist --project-name driftlab-pages
+bun run dev:backend
+bun run dev:mcp
+bun run dev:frontend
 ```
 
-For Git-connected Pages use:
+Open the Vite address printed in the frontend terminal, usually `http://localhost:5173`. In development, the frontend uses the API at `http://localhost:8788` by default. Set `VITE_API_BASE_URL` to use a different API address.
 
-```text
-Build command: bun run build
-Build output directory: frontend/dist
-Environment variable: VITE_API_BASE_URL=<deployed API Worker URL>
-```
+## Deployment
 
-Set the model and ArmorIQ Worker secrets before deploying. The protected workflow also needs the ArmorIQ user, agent, and MCP identity values configured in the ArmorIQ dashboard:
+The live application is deployed at the URLs listed above. To deploy your own instance, configure the Cloudflare D1 bindings and required secrets in the Wrangler files, then deploy the Workers and Pages app:
 
 ```bash
-wrangler secret put OPENAI_API_KEY --config backend/wrangler.toml
-wrangler secret put OPENROUTER_API_KEY --config backend/wrangler.toml
-wrangler secret put ARMORIQ_API_KEY --config backend/wrangler.toml
-wrangler secret put ARMORIQ_USER_ID --config backend/wrangler.toml
-wrangler secret put ARMORIQ_USER_EMAIL --config backend/wrangler.toml
-wrangler secret put ARMORIQ_AGENT_ID --config backend/wrangler.toml
-wrangler secret put ARMORIQ_MCP_NAME --config backend/wrangler.toml
+bun run --cwd backend deploy
+bun run --cwd mcp deploy
+bun run --cwd frontend build:prod
+bun run --cwd frontend deploy
 ```
 
-The API Worker is configured for Groq with `OPENAI_BASE_URL=https://api.groq.com/openai/v1` and `OPENAI_MODEL=qwen/qwen3.8-27b`.
+`build:prod` points the frontend at the DriftLab API URL. Set `VITE_API_BASE_URL` to your API Worker URL when deploying a separate instance. Protected workflows require valid ArmorIQ configuration; the unprotected demo path requires a configured model provider.
 
-## Checks
+## Tech stack
 
-```bash
-bun run typecheck
-bun run build
-```
-
-`bun run build` creates the React/Vite bundle in `frontend/dist`.
-
-The Cloudflare Worker implementation is the only backend path. It uses Hono, SSE, and D1.
+- React, Vite, and TypeScript
+- Cloudflare Pages and Workers
+- Hono, server-sent events, and the MCP protocol
+- Cloudflare D1
+- ArmorIQ policy checks for protected tool execution
